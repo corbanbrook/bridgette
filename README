@@ -1,0 +1,6 @@
+bridgette - an agnostic/dumb tcp to websocket bridge server
+
+Bridgette is protocol indifferent and will pass messages back and forth between a connected websocket client and a tcp server. 
+Built with Ruby event-machine and the em-websocket plugin.
+
+For instance it could be used to forward between a web based chat client  and an IRC server.
