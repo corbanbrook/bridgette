@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <title>Sockem - WebSocket to TCP Bridge</title>
+    
+    <script>
+      var nickname = "bridget" + Math.round(Math.random() * 100);
+      var mode;
+      
+      document.addEventListener('DOMContentLoaded', function() {        
+        var container = document.getElementById("container");
+        var server    = document.getElementById("server");
+        var prompt    = document.getElementById("prompt");
+        
+        var channelsDiv = document.createElement('div');
+        channelsDiv.setAttribute("style", "z-index: 1000; position: absolute; left: 0; top: 0;");
+        document.body.appendChild(channelsDiv);
+                
+        window.onresize = function() {
+          var width = window.innerWidth, height = window.innerHeight;
+          container.style.width   = width + "px";
+          container.style.height  = height - 24 + "px";
+          server.style.width      = width + "px";
+          server.style.height     = height-50 + "px";
+          server.style.overflow   = "auto";
+          prompt.style.width      = width - 10 + "px";
+          channelsDiv.style.height = "32px;"
+          channelsDiv.style.width = width + "px";
+        };
+        window.onresize();
+
+        var ws = new WebSocket("ws://weare.buildingsky.net:7777/websocket");
+        
+        ws.onmessage = function(event) {
+          var message = event.data;
+          if (message.match(/^BRIDGE CONNECTED/)) {
+            ws.send("USER corban corban corban : a WebSocket to TCP Bridge\r\n");
+            logMessage("USER corban corban corban : a WebSocket to TCP Bridge\r\n", "client");
+            ws.send("NICK " + nickname + "\r\n");
+            logMessage("NICK " + nickname + "\r\n", "client");
+          } else if (message.match(new RegExp(":" + nickname + " MODE " + nickname + " :(.+)"))) {
+            mode = RegExp.$1;
+          } else if (message.match(/^\[error\]/)) {
+            message = message.replace(/^\[error\]/, "");
+            logMessage(message, "error");
+          } else if (message.match(/PING\s:(.+)/)) {
+            logMessage(message, "server");
+            ws.send("PONG :" + RegExp.$1);
+            logMessage("PONG :" + RegExp.$1, "client");
+          } else if (message.match(/PRIVMSG/)) {
+            privMessage(message);
+          } else {
+            logMessage(message.replace(/\n/g, "<br />"), "server");
+          }
+        };
+        
+        ws.onclose = function() { 
+          logMessage("WebSocket disconnected.", "error"); 
+        };
+        
+        ws.onopen = function() {
+          logMessage("Connecting to bridge server...", "client");
+          ws.send("/bridge irc.mozilla.org 6668");
+          
+          var button = document.createElement("a");
+          button.innerHTML = "irc.mozilla.org";
+          button.className = "channelButton";
+        
+          var serverLog = {domButton: button, domLog: server};
+             
+          button.onclick = function() {
+            Channel.activate(serverLog);
+          };
+          
+          Channel.activate(serverLog);
+          
+          channelsDiv.appendChild(button);
+        };
+        
+        function logMessage(message, source) {
+          var messageDiv = document.createElement("div");
+          var timestamp = new Date();
+          
+          var hour = timestamp.getHours();
+          var mins = timestamp.getMinutes();
+          hour = hour < 10 ? "0" + hour : hour;
+          mins = mins < 10 ? "0" + mins : mins;
+          
+          messageDiv.innerHTML = "<div class=\"timestamp\">" + hour + ":" + mins + "</div><div class=\"message\">" + message + "</div>";
+          messageDiv.className = source + "Message";
+          
+          server.appendChild(messageDiv);
+          server.scrollTop = server.scrollHeight; // scroll to the bottom always
+        }
+        
+        function privMessage(command) {
+          command = command.trim();
+          switch(true) {
+            case /^:([^!]+)!([^@]+)@([^\s]+)\sPRIVMSG\s(#[^\s]+)\s:\001ACTION\s(.+)\001$/.test(command):
+              var payload = {
+                nickname: RegExp.$1,
+                username: RegExp.$2,
+                hostname: RegExp.$3,
+                channel:  RegExp.$4,
+                message:  RegExp.$5,
+                type: "action",
+                timestamp: new Date()
+              };
+              break;
+            case /^:([^!]+)!([^@]+)@([^\s]+)\sPRIVMSG\s(#[^\s]+)\s:(.+)$/.test(command):
+              var payload = {
+                nickname: RegExp.$1,
+                username: RegExp.$2,
+                hostname: RegExp.$3,
+                channel:  RegExp.$4,
+                message:  RegExp.$5,
+                type: "message",
+                timestamp: new Date()
+              };
+              break;
+            default:
+              // do nothing
+              break;
+          }
+          
+          if (payload !== undefined) {
+            var messageDiv = document.createElement("div");
+            var hour = payload.timestamp.getHours();
+            var mins = payload.timestamp.getMinutes();
+            hour = hour < 10 ? "0" + hour : hour;
+            mins = mins < 10 ? "0" + mins : mins;
+
+            if (payload.type === "message") {
+              messageDiv.innerHTML = "<div class=\"timestamp\">" + hour + ":" + mins + "</div><div class=\"nickname\">&lt;" + payload.nickname + "&gt;</div><div class=\"message\">" + payload.message + "</div>";
+              messageDiv.className = "privMessage";
+            } else if (payload.type === "action") {
+              messageDiv.innerHTML = "<div class=\"timestamp\">" + hour + ":" + mins + "</div><div class=\"nickname\">&nbsp;</div><div class=\"message\"><span class=\"nickname\">" + payload.nickname + "</span> " + payload.message + "</div>";
+              messageDiv.className = "privMessage";
+            }
+            
+            var channel = Channel.list[payload.channel];
+            channel.domLog.appendChild(messageDiv);
+            channel.domLog.scrollTop = channel.domLog.scrollHeight;
+            
+            if (Channel.active.name !== channel.name) {
+              channel.unreadMessages++;
+              if (!/\sunread/.test(channel.domButton.className)) {
+                channel.domButton.className += " unread";
+              }
+            }
+            
+            var logDiv = document.createElement("div");
+            logDiv.innerHTML = command;
+            logDiv.className = "serverMessage";
+            
+            server.appendChild(logDiv);
+            server.scrollTop = server.scrollHeight; // scroll to the bottom always
+          }
+        }
+        
+        function Channel(name) {
+          var chan = this;
+          this.name = name;
+          this.unreadMessages = 0;
+          
+          this.domLog = document.createElement("div");
+          this.domButton = document.createElement("a");
+          
+          this.domLog.className = "log";
+          this.domLog.style.top = server.style.top;
+          this.domLog.style.height = server.style.height;
+          this.domLog.style.width = server.style.width;
+          this.domLog.style.overflow = "auto";
+          container.appendChild(this.domLog);
+          
+          this.domLog.id = "channel" + name.replace(/^#/, "");
+          
+          this.domButton.onclick = function() {
+            Channel.activate(chan);
+          };
+          
+          this.domButton.innerHTML = this.name;
+          this.domButton.className = "channelButton";
+          channelsDiv.appendChild(this.domButton);
+        }
+        
+        Channel.list = {};
+        //Channel.active = undefined;
+        
+        Channel.activate = function(channel) {
+          if (Channel.active !== undefined) {
+            Channel.active.domButton.className = Channel.active.domButton.className.replace(/\sactive/, "");
+            Channel.active.domLog.style.visibility = "hidden";  
+          }
+          channel.domButton.className += " active"; 
+          channel.domLog.style.visibility = "visible";
+          Channel.active = channel;
+          
+          if (/\sunread/.test(channel.domButton.className)) {
+            channel.domButton.className = channel.domButton.className.replace(/\sunread/, "");
+          }
+          
+          channel.unreadMessages = 0;
+        };
+        
+        Channel.join = function(name) {
+          var channel = new Channel(name);
+          Channel.list[channel.name] = channel;
+          
+          ws.send("JOIN " + channel.name);
+          logMessage("JOIN " + channel.name, "client");
+          
+          Channel.activate(channel);
+        };
+        
+        this.send = function(form) {
+          var message = form.prompt.value;
+          
+          if (message.length) {
+            switch (true) {
+              case /^\/(\w+)\s(.+)$/.test(message):
+                var command = RegExp.$1;
+                var args    = RegExp.$2;
+                switch (command) {
+                  case "join":
+                    Channel.join(args);
+                    break;
+                  
+                  case "quit":
+                    ws.send("QUIT :" + args);
+                    logMessage("QUIT :" + args, "client");
+                    break;
+                    
+                  case "me":
+                    ws.send("PRIVMSG " + Channel.active.name + " :\001ACTION " + args + "\001");
+                    logMessage("PRIVMSG " + Channel.active.name + " :\001ACTION " + args + "\001", "server");
+                    var messageDiv = document.createElement("div");
+                    var timestamp = new Date();
+
+                    var hour = timestamp.getHours();
+                    var mins = timestamp.getMinutes();
+                    hour = hour < 10 ? "0" + hour : hour;
+                    mins = mins < 10 ? "0" + mins : mins;
+
+                    messageDiv.innerHTML = "<div class=\"timestamp\">" + hour + ":" + mins + "</div><div class=\"yournickname\">&nbsp;</div><div class=\"message\"><span class=\"yournickname\">" + nickname + "</span> " + args + "</div>";
+                    messageDiv.className = "clientMessage";
+
+                    Channel.active.domLog.appendChild(messageDiv);
+                    Channel.active.domLog.scrollTop = Channel.active.domLog.scrollHeight; // scroll to the bottom always
+                    break;
+                    
+                  case "nick":
+                    ws.send("NICK " + args);
+                    logMessage("NICK " + args, "server");
+                    nickname = args;
+                    break;
+                }
+                break;
+                
+              default:
+                if (Channel.active !== undefined) {
+                  // send to server
+                  ws.send("PRIVMSG " + Channel.active.name + " :" + message);
+                  
+                  // log to server log
+                  logMessage("PRIVMSG " + Channel.active.name + " :" + message, "client");
+                  
+                  // display to channel window
+                  
+                  var messageDiv = document.createElement("div");
+                  var timestamp = new Date();
+
+                  var hour = timestamp.getHours();
+                  var mins = timestamp.getMinutes();
+                  hour = hour < 10 ? "0" + hour : hour;
+                  mins = mins < 10 ? "0" + mins : mins;
+
+                  messageDiv.innerHTML = "<div class=\"timestamp\">" + hour + ":" + mins + "</div><div class=\"yournickname\">&lt;" + nickname + "&gt;</div><div class=\"message\">" + message + "</div>";
+                  messageDiv.className = "clientMessage";
+
+                  Channel.active.domLog.appendChild(messageDiv);
+                  Channel.active.domLog.scrollTop = Channel.active.domLog.scrollHeight; // scroll to the bottom always
+                } else {
+                  logMessage("You must join a channel first", "error");
+                }
+                break;
+            }
+            form.prompt.value = ""; // clear prompt
+          }
+          return false;
+        }
+      }, false);
+    </script>
+    <style>
+      body, * {
+        margin:0;
+        padding:0;
+        font: 12px monospace;
+      }
+      
+      #container {
+        padding-top: 24px;
+      }
+      
+      #server {
+        background-color: #0a0026;
+      }
+      
+      a.channelButton {
+        border: 1px outset #ccc;
+        padding: 3px;
+        background-color: #ccc;
+        color: #333;
+      }
+      
+      a.active {
+        border: 1px outset #aea;
+        padding: 3px;
+        background-color: #dda;
+        color: #780;
+      }
+      
+      a.unread {
+        border: 1px outset #eaa;
+        padding: 3px;
+        background-color: #fcc;
+        color: #900;
+      }
+      
+      div.serverMessage {
+        background-color: #160d28;
+        color: #666666;
+        padding: 3px;
+      }
+      
+      div.clientMessage {
+        color: #33ffa9;
+        padding: 3px;
+
+      }
+      
+      div.errorMessage {
+        border: 1px outset #eaa;
+        padding: 3px;
+        background-color: #fcc;
+        color: #900;
+      }
+      
+      div.privMessage {
+        background-color: #160d28;
+        color: #666666;
+        padding: 3px;
+      }
+      
+      div.timestamp {
+        float: left;
+        color: #fffcb5;
+        clear: left;
+        width: 36px;
+        margin-right: 10px;
+      }
+      
+      div.nickname {
+        float: left;
+        color: #888;
+        width: 120px;
+        margin-right: 10px;
+        text-align: right;
+      }
+      span.nickname {
+        color: #888;
+      }
+      
+      div.yournickname {
+        float: left;
+        color: #99ff66;
+        width: 120px;
+        margin-right: 10px;
+        text-align: right;
+      }
+      span.yournickname {
+        color: #99ff66;
+      }
+      
+      div.message {
+        float: left;
+        width: 900px;
+      }
+      
+      div.log {
+        visibility: hidden;
+        position: absolute;
+        z-index: 1000;
+        top: 24px;
+        left: 0;
+        background-color: #0a0026;
+        color: #33ffa9;
+      }
+    </style>
+
+  </head>
+  <body>
+    <div id="container">
+      <div id="server"></div>
+      <form name="promptForm" id="promptForm" onsubmit="return send(this);">
+        <input type="text" name="prompt" id="prompt">
+      </form>
+    </div>
+  </body>
+</html>
